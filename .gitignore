@@ -1,6 +1,42 @@
+# Environment and local configuration
 .env
+.env.*
+!.env.example
 *.local
-.DS_Store
+
+# Dependencies / generated output
 node_modules/
 output/
 *.tmp
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets, credentials and private keys
+*backup*code*
+*recovery*code*
+*credential*
+*credentials*
+*secret*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Databases and runtime data
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs: synthetic examples may be explicitly force-added if required
+*.log
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
