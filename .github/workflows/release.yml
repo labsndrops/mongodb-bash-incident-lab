@@ -1,0 +1,118 @@
+# Release — valida semver, publica release con notas y sincroniza el espejo main.
+# Politica: .ia_talks/temas/05_infraestructura_devops_y_herdr/GITFLOW_5_AMBIENTES_Y_RELEASES.md
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version vX.Y.Z a publicar (crea el tag sobre production si falta)"
+        required: true
+        type: string
+      dry_run:
+        description: "Solo validar, sin crear tag ni release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolver y validar version
+        id: ver
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            VER="$INPUT_VERSION"
+          else
+            VER="$REF_NAME"
+          fi
+          if ! printf '%s' "$VER" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Version invalida '$VER'. Formato obligatorio: vX.Y.Z (semver, sin prefijos ni sufijos)."
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${DRY_RUN:-false}" >> "$GITHUB_OUTPUT"
+          echo "Version valida: $VER"
+
+      - name: Checkout production
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: production
+
+      - name: Verificar que el tag pertenece a production
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          if git rev-parse -q --verify "refs/tags/$VER" >/dev/null; then
+            TAG_SHA=$(git rev-list -n1 "$VER")
+            if ! git merge-base --is-ancestor "$TAG_SHA" origin/production; then
+              echo "::error::El tag $VER ($TAG_SHA) no esta en el historial de production."
+              exit 1
+            fi
+            echo "Tag $VER existe y pertenece a production."
+          else
+            if [ "$EVENT" != "workflow_dispatch" ]; then
+              echo "::error::Tag $VER no existe."
+              exit 1
+            fi
+            echo "Tag no existe; se creara sobre production."
+          fi
+
+      - name: Crear tag si falta
+        if: steps.ver.outputs.dry_run != 'true'
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$VER" >/dev/null; then
+            echo "Tag $VER ya existe."
+          else
+            git tag -a "$VER" -m "Release $VER" origin/production
+            git push origin "refs/tags/$VER"
+          fi
+
+      - name: Publicar GitHub Release
+        if: steps.ver.outputs.dry_run != 'true'
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VER" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VER ya existe."
+          else
+            gh release create "$VER" --repo "$GITHUB_REPOSITORY" --title "$VER" --generate-notes --verify-tag
+          fi
+
+      - name: Sincronizar espejo main desde production
+        id: sync
+        if: steps.ver.outputs.dry_run != 'true'
+        continue-on-error: true
+        run: git push origin "refs/remotes/origin/production:refs/heads/main"
+
+      - name: Aviso si el espejo no se sincronizo
+        if: steps.ver.outputs.dry_run != 'true' && steps.sync.outcome == 'failure'
+        run: |
+          echo "::warning::No se pudo fast-forward main (proteccion o divergencia). Sincronizar a mano: git push origin production:main"
