@@ -80,6 +80,11 @@ jobs:
             echo "Tag no existe; se creara sobre production."
           fi
 
+      - name: Configurar identidad git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Crear tag si falta
         if: steps.ver.outputs.dry_run != 'true'
         env:
